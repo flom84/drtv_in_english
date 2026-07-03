@@ -36,7 +36,6 @@ src/
   content/                # menu + track injector
   options/                # provider/key form
   shared/                 # types, episode-id helpers, storage wrapper
-spike/                    # Phase 0 single-file spike (kept for reference)
 icons/
 ```
 
@@ -101,8 +100,9 @@ zips.
 
 - Privacy policy hosted on GitHub Pages
 - Background service worker:
-    - `webRequest` sniffer for `*.vtt` on `*.dr.dk` (`vtt-sniffer.ts`) (Firefox); Chrome
-      uses a `MAIN` world content script to patch `fetch`/`XMLHttpRequest`.
+    - Page-world `fetch`/`XMLHttpRequest` patch (`inject.ts` + `early.ts`) for both
+      browsers; `webRequest` listener as optional Firefox-only fallback when host
+      permissions are granted.
     - VTT parser with CRLF → LF normalisation (`vtt-parser.ts`).
     - Real LLM adapters for ALX (the default), Anthropic, OpenAI, Gemini, and any
       OpenAI-compatible endpoint (incl. local models).
