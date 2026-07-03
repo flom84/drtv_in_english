@@ -23,8 +23,6 @@ Developer:
 No backend, no proxy, no media downloading. DR's player handles
 playback; the extension only adds an extra subtitle track.
 
-Full architecture and phased plan: [`docs/extension-plan.md`](docs/extension-plan.md).
-
 ## Layout
 
 ```
@@ -38,8 +36,6 @@ src/
   shared/                 # types, episode-id helpers, storage wrapper
 spike/                    # Phase 0 single-file spike (kept for reference)
 icons/
-docs/
-  extension-plan.md
 ```
 
 ## Screenshots
@@ -80,8 +76,7 @@ time.
 
 1. `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on**.
 2. Pick `dist/firefox/manifest.json`.
-3. Open a DRTV episode (e.g. the Phase 0 test episode in
-   [`docs/extension-plan.md`](docs/extension-plan.md)).
+3. Open a DRTV episode.
 4. Click DR's subtitle button → pick **English** to translate the
    episode. The status pill in the bottom-right shows progress.
 5. DevTools → Browser Console to see `[drtv-en/...]` logs from both
