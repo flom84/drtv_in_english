@@ -63,10 +63,18 @@ npm run package    # build, then zip each target into dist/ for store upload
 npm run typecheck  # tsc --noEmit
 ```
 
-`npm run package` produces `dist/drtv-in-english-chrome-<version>.zip` and
-`dist/drtv-in-english-firefox-<version>.zip`. Sourcemaps are excluded.
-The Chrome zip is what the Web Store accepts directly; AMO accepts the
-Firefox zip and re-signs it as an XPI on submission.
+`npm run package` produces three zips in `dist/`:
+
+- `drtv-in-english-chrome-<version>.zip` — what the Web Store accepts
+  directly.
+- `drtv-in-english-firefox-<version>.zip` — AMO accepts this and
+  re-signs it as an XPI on submission.
+- `drtv-in-english-source-<version>.zip` — raw source AMO requires for
+  bundled add-ons (no `dist/` output or minified code).
+
+Sourcemaps are excluded from the packed extensions. Version is bumped in
+`package.json` only; `build.mjs` injects it into each manifest at build
+time.
 
 ### Load in Firefox
 
@@ -95,8 +103,8 @@ Firefox zip and re-signs it as an XPI on submission.
 - Background service worker:
   - `webRequest` sniffer for `*.vtt` on `*.dr.dk` (`vtt-sniffer.ts`).
   - VTT parser with CRLF → LF normalisation (`vtt-parser.ts`).
-  - Real LLM adapters for Anthropic, OpenAI, Gemini, and
-    OpenAI-compatible endpoints, plus a stub for offline testing.
+  - Real LLM adapters for Anthropic, OpenAI, Gemini, ALX (the
+    default), and any OpenAI-compatible endpoint (incl. local models).
   - Per-tab port lifecycle with cancel-on-disconnect.
   - IndexedDB cache keyed by `(episodeId, sourceVttHash)`.
 - Content script:
