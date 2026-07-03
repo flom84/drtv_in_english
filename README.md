@@ -41,14 +41,17 @@ icons/
 
 ## Screenshots
 
-![Options page](package/assets/drtv-in-english-options-chrome.jpg) _Options page —
-choose your LLM provider and enter your API key_
+![Options page](package/assets/drtv-in-english-options-chrome.jpg)
 
-![Subtitle menu](package/assets/drtv-in-english-subs-menu-chrome.jpg) _Three-way Off /
-Dansk / English menu injected into DR's player_
+_Options page — choose your LLM provider and enter your API key_
 
-![English subtitles](package/assets/drtv-in-english-subs-chrome.jpg) _English subtitles
-rendering over the video_
+![Subtitle menu](package/assets/drtv-in-english-subs-menu-chrome.jpg)
+
+_Three-way Off / Dansk / English menu injected into DR's player_
+
+![English subtitles](package/assets/drtv-in-english-subs-chrome.jpg)
+
+_English subtitles rendering over the video_
 
 ## Develop
 
