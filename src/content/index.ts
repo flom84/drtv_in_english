@@ -47,11 +47,13 @@ let statusEl: HTMLElement | null = null;
 let statusTextEl: HTMLElement | null = null;
 
 async function bootEpisode(episodeId: string): Promise<void> {
+  console.log(TAG, "bootEpisode start", { episodeId, href: location.href });
   const video = await waitForVideo();
   if (!video) {
     console.warn(TAG, "no <video> appeared in time");
     return;
   }
+  console.log(TAG, "video found for episode", { episodeId, tagName: video.tagName, readyState: video.readyState });
   // Bail if we got torn down while waiting (user nav'd away mid-mount).
   if (state && state.episodeId !== episodeId) return;
 
@@ -174,6 +176,10 @@ function applySelection(s: EpisodeState, mode: SubMode): void {
 
   if (mode === "english") {
     if (!hasEnglishCues(s.track)) {
+      console.log(TAG, "requesting translation for English mode", {
+        episodeId: s.episodeId,
+        playhead: s.video.currentTime,
+      });
       s.guard.reset();
       // Pause immediately so the user doesn't watch untranslated playback
       // while the background fetches / parses / starts translating.
@@ -185,6 +191,7 @@ function applySelection(s: EpisodeState, mode: SubMode): void {
         playhead: s.video.currentTime,
       });
     } else {
+      console.log(TAG, "English cues already present; re-enabling guard");
       s.guard.enable();
     }
   } else {
@@ -233,10 +240,7 @@ function onPortEvent(event: PortEvent): void {
       // playback when runway runs out — no need for a "retry" nag.
       stopStallWatchdog(s);
       s.track.addCues(event.cues);
-      // markReady is unnecessary — the BufferGuard's check() callback
-      // (fired on video timeupdate) computes the frontier dynamically
-      // from cue start times and drives the overlay.  See the "done"
-      // case below for the success message.
+      s.guard.markReady(event.cues.map((cue) => cue.start));
       break;
     case "done":
       stopStallWatchdog(s);
@@ -274,17 +278,18 @@ interface StatusOpts {
   hideAfterMs?: number;
 }
 
-function attachStatusOverlay(video: HTMLVideoElement): void {
+function attachStatusOverlay(hostTarget: HTMLElement | HTMLVideoElement): void {
+  const video = hostTarget instanceof HTMLVideoElement ? hostTarget : null;
   // Re-host the overlay if DR rebuilt the player container under us.
   if (statusEl && statusEl.isConnected && statusEl.parentElement) {
-    if (statusEl.parentElement.contains(video)) return;
+    if (video && statusEl.parentElement.contains(video)) return;
     console.log(TAG, "re-hosting overlay — video moved");
     statusEl.remove();
     statusEl = null;
     statusTextEl = null;
   }
-  const host = video.parentElement ?? document.body;
-  console.log(TAG, "attachStatusOverlay host:", host.tagName, "video parent:", video.parentElement?.tagName);
+  const host = video?.parentElement ?? hostTarget ?? document.body;
+  console.log(TAG, "attachStatusOverlay host:", host.tagName, "video parent:", video?.parentElement?.tagName ?? "none");
   if (getComputedStyle(host).position === "static") {
     host.style.position = "relative";
   }
@@ -349,13 +354,42 @@ function watchUrl(): void {
     lastUrl = location.href;
     const nextId = extractEpisodeId(location.href);
     const currentId = state?.episodeId ?? null;
+    if (isLiveChannelPage(location.href)) {
+      teardownEpisode("live-channel");
+      showLivePageMessage();
+      return;
+    }
     if (nextId === currentId) return;
     teardownEpisode("spa-nav");
     if (nextId) void bootEpisode(nextId);
   }, 500);
 }
 
+function isLiveChannelPage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return /\/drtv\/kanal\//i.test(u.pathname) || /\/drtv\/live\//i.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function showLivePageMessage(): void {
+  const video = document.querySelector("video");
+  const host = video?.parentElement ?? document.body;
+  attachStatusOverlay(host);
+  showStatus(
+    "DRTV in English works on on-demand episodes only. Live TV pages are not supported yet.",
+    { hideAfterMs: 8000 },
+  );
+}
+
 function start(): void {
+  if (isLiveChannelPage(location.href)) {
+    console.warn(TAG, "ignoring live channel page", location.href);
+    showLivePageMessage();
+    return;
+  }
   const id = extractEpisodeId(location.href);
   if (id) void bootEpisode(id);
   watchUrl();

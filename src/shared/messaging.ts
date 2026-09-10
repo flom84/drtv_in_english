@@ -1,10 +1,9 @@
 // Episode id extraction shared by content + background.
 //
-// DRTV URLs come in two flavours:
+// Supported episode URLs on DRTV are only the actual on-demand episode pages:
 //   /drtv/se/<slug>_<id>
 //   /drtv/episode/<id>
-// The trailing numeric (sometimes alphanumeric) segment after the final
-// underscore is the canonical id used by DR's APIs.
+// /drtv/kanal/... is a live channel page, not an episode, and must be ignored.
 
 export function extractEpisodeId(url: string): string | null {
   try {
@@ -13,7 +12,11 @@ export function extractEpisodeId(url: string): string | null {
     const m =
       u.pathname.match(/\/drtv\/se\/[^/]*_([^/?#]+)/) ??
       u.pathname.match(/\/drtv\/episode\/([^/?#]+)/);
-    return m ? (m[1] ?? null) : null;
+    if (!m) return null;
+    const id = m[1] ?? null;
+    if (!id) return null;
+    const underscore = id.lastIndexOf("_");
+    return underscore >= 0 ? id.slice(underscore + 1) : id;
   } catch {
     return null;
   }

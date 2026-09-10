@@ -1,12 +1,13 @@
 // Provider configuration persisted in chrome.storage.local. Each
-// preset binds an API shape (/messages, /responses, /chat/completions)
-// to a default endpoint and model; both are user-editable.
+// preset binds an API shape (/messages, /responses, /chat/completions, or
+// /translate) to a default endpoint and model; both are user-editable.
 
 export type Provider =
   | "anthropic"
   | "openai"
   | "gemini"
   | "alx"
+  | "libretranslate"
   | "openai-compatible";
 
 export interface ProviderConfig {
@@ -46,6 +47,11 @@ export const PROVIDER_PRESETS: Record<Provider, ProviderPreset> = {
     label: "ALX",
     endpoint: "https://inference.alexandra.dk/v1/chat/completions",
     model: "qwen3.5-397b",
+  },
+  libretranslate: {
+    label: "LibreTranslate",
+    endpoint: "http://127.0.0.1:5000/translate",
+    model: "libretranslate",
   },
   "openai-compatible": {
     label: "OpenAI-compatible",

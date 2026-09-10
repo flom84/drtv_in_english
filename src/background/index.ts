@@ -52,9 +52,12 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== PORT_NAME) return;
   const tabId = port.sender?.tab?.id;
   if (tabId === undefined) {
+    console.warn("[drtv-en/bg] rejecting port connect without tab id", port.name);
     port.disconnect();
     return;
   }
+
+  console.log("[drtv-en/bg] port connected for tab", tabId, "episode", port.sender?.url ?? "unknown");
 
   const send = (event: PortEvent) => {
     try {
@@ -65,6 +68,7 @@ chrome.runtime.onConnect.addListener((port) => {
   };
 
   port.onMessage.addListener((msg: PortMessage) => {
+    console.log("[drtv-en/bg] port message", tabId, msg.type, msg);
     if (msg.type === "episode-active") {
       // Re-arm: a fresh episode means any pending job for this tab is
       // stale.
@@ -76,15 +80,24 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     if (msg.type === "request-translate") {
+      console.log("[drtv-en/bg] request-translate start", {
+        tabId,
+        episodeId: msg.episodeId,
+        playhead: msg.playhead ?? 0,
+      });
       void runJob(tabId, msg.episodeId, msg.playhead ?? 0, send);
     }
     if (msg.type === "seek") {
       const job = activeJobs.get(tabId);
-      if (job) job.playhead = msg.time;
+      if (job) {
+        console.log("[drtv-en/bg] seek update", { tabId, time: msg.time, old: job.playhead });
+        job.playhead = msg.time;
+      }
     }
   });
 
   port.onDisconnect.addListener(() => {
+    console.log("[drtv-en/bg] port disconnected for tab", tabId);
     clearInterval(heartbeatInterval);
     cancelJob(tabId);
   });
@@ -121,6 +134,7 @@ async function runJob(
   }, 10_000);
 
   try {
+    console.log("[drtv-en/bg] runJob start", { tabId, episodeId, initialPlayhead });
     const playlist = await waitForDanishPlaylist(tabId, abort.signal, send);
     if (!playlist) return;
 
@@ -131,6 +145,7 @@ async function runJob(
     console.log("[drtv-en/bg] parsed cues:", cues.length, "first:", cues[0]);
     send({ type: "status", state: "parsing" });
     if (cues.length === 0) {
+      console.warn("[drtv-en/bg] no cues parsed from playlist", playlist);
       send({ type: "error", message: "VTT parsed but no cues found" });
       return;
     }
@@ -140,7 +155,21 @@ async function runJob(
     send({ type: "schedule", starts: cues.map((c) => c.start) });
 
     const cfg = await loadProviderConfig();
-    if (!cfg.apiKey || !cfg.endpoint || !cfg.model) {
+    console.log("[drtv-en/bg] provider config loaded", {
+      provider: cfg.provider,
+      endpoint: cfg.endpoint,
+      model: cfg.model,
+      hasApiKey: !!cfg.apiKey,
+      batchSize: cfg.batchSize,
+      contextWindow: cfg.contextWindow,
+      maxParallel: cfg.maxParallel,
+    });
+    if (
+      (cfg.provider !== "libretranslate" && !cfg.apiKey) ||
+      !cfg.endpoint ||
+      !cfg.model
+    ) {
+      console.warn("[drtv-en/bg] missing provider config", cfg);
       send({
         type: "error",
         message:
@@ -164,12 +193,14 @@ async function runJob(
       console.warn("[drtv-en/bg] cache lookup failed", err);
       return null;
     });
+    console.log("[drtv-en/bg] source hash", { episodeId, sourceHash, cueCount: cues.length });
     if (cached) {
       console.log("[drtv-en/bg] cache hit:", cached.length, "cues");
       send({ type: "cues", cues: cached });
       send({ type: "done", total: cached.length });
       return;
     }
+    console.log("[drtv-en/bg] cache miss for episode", episodeId);
 
     send({ type: "status", state: "translating", detail: String(cues.length) });
     const translated: typeof cues = [];
@@ -181,6 +212,12 @@ async function runJob(
       onBatch,
       signal: abort.signal,
       getPlayhead: () => job.playhead,
+    });
+    console.log("[drtv-en/bg] translateWithLLM finished", {
+      episodeId,
+      total,
+      translatedCount: translated.length,
+      aborted: abort.signal.aborted,
     });
     if (!abort.signal.aborted && translated.length > 0) {
       translated.sort((a, b) => a.start - b.start);
@@ -227,6 +264,11 @@ async function waitForDanishPlaylist(
   while (!signal.aborted && Date.now() < deadline) {
     const subs = getSubsForTab(tabId);
     const masterUrl = subs ? deriveMasterUrl(subs) : undefined;
+    console.log("[drtv-en/bg] waiting for Danish playlist", {
+      tabId,
+      observed: subs ? { masterUrl: subs.masterUrl, playlists: [...subs.playlists], segments: subs.segments.size } : null,
+      masterUrl,
+    });
     if (masterUrl) {
       const resolved = await tryResolveFromMaster(masterUrl, signal);
       if (resolved) return resolved;
@@ -244,6 +286,7 @@ async function waitForDanishPlaylist(
     await new Promise((r) => setTimeout(r, 250));
   }
   if (signal.aborted) return undefined;
+  console.warn("[drtv-en/bg] waitForDanishPlaylist timed out", { tabId, deadlineMs: 10_000 });
   send({
     type: "error",
     message:

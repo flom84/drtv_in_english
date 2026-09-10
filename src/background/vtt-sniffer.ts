@@ -37,10 +37,12 @@ export function setVttUrlForTab(tabId: number, url: string): void {
   const s = ensure(tabId);
   if (/\/master[^/]*\.m3u8/i.test(url)) {
     s.masterUrl = url;
+    console.log("[drtv-en/bg] sniffed master manifest", { tabId, url });
     return;
   }
   if (/\/subtitles\/[^?#]*\.m3u8/i.test(url)) {
     s.playlists.add(url);
+    console.log("[drtv-en/bg] sniffed playlist", { tabId, url });
     return;
   }
   s.segments.add(url);
@@ -73,13 +75,23 @@ export function getSubsForTab(tabId: number): TabSubs | undefined {
 export function chooseBestPlaylist(subs: TabSubs): string | undefined {
   // The "Dansk" track URL contains "HardOfHearing" in DR's naming.
   for (const p of subs.playlists) {
-    if (/HardOfHearing/i.test(p)) return p;
+    if (/HardOfHearing/i.test(p)) {
+      console.log("[drtv-en/bg] chose Dansk playlist by HardOfHearing naming", p);
+      return p;
+    }
   }
   // Otherwise: any playlist that doesn't smell like a foreign-only
   // ("Fremmedsprog") track.
   for (const p of subs.playlists) {
-    if (!/\/Foreign-/i.test(p)) return p;
+    if (!/\/Foreign-/i.test(p)) {
+      console.log("[drtv-en/bg] chose fallback playlist", p);
+      return p;
+    }
   }
+  console.warn("[drtv-en/bg] no usable playlist found in tab subs", {
+    playlists: [...subs.playlists],
+    segments: subs.segments.size,
+  });
   return undefined;
 }
 

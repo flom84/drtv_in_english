@@ -46,8 +46,10 @@ export async function fetchCuesFromPlaylist(
   _signal: AbortSignal,
 ): Promise<Cue[]> {
   // Note: signal ignored — pageFetch doesn't support abort yet
+  console.log("[drtv-en/bg] fetching playlist", playlistUrl);
   const text = await pageFetch(playlistUrl);
   const segmentUris = parseM3u8Segments(text);
+  console.log("[drtv-en/bg] playlist segment count", { playlistUrl, count: segmentUris.length });
   if (segmentUris.length === 0) throw new Error("playlist had no segments");
 
   const base = new URL(playlistUrl);

@@ -85,7 +85,9 @@ function setApiKeyLabel(provider: Provider): void {
   const label = document.querySelector('label[for="apiKey"]');
   if (!label) return;
   label.textContent =
-    provider === "openai-compatible"
+    provider === "libretranslate"
+      ? "API key (optional)"
+      : provider === "openai-compatible"
       ? "API key (enter any value if the server doesn't require one)"
       : "API key";
 }
@@ -113,7 +115,7 @@ async function init(): Promise<void> {
     const endpoint = $("endpoint").value.trim();
     const model = $("model").value.trim();
     const apiKey = $("apiKey").value;
-    if (!endpoint || !model || !apiKey) {
+    if (!endpoint || !model || (provider !== "libretranslate" && !apiKey)) {
       status.classList.add("error");
       status.textContent =
         "Endpoint, model, and API key are all required.";

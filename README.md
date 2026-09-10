@@ -107,8 +107,8 @@ zips.
       browsers; `webRequest` listener as optional Firefox-only fallback when host
       permissions are granted.
     - VTT parser with CRLF → LF normalisation (`vtt-parser.ts`).
-    - Real LLM adapters for ALX (the default), Anthropic, OpenAI, Gemini, and any
-      OpenAI-compatible endpoint (incl. local models).
+    - Real LLM adapters for ALX (the default), Anthropic, OpenAI, Gemini, LibreTranslate
+      (including a local server), and any OpenAI-compatible endpoint.
     - Per-tab port lifecycle with cancel-on-disconnect.
     - IndexedDB cache keyed by `(episodeId, sourceVttHash)` so repeat views load
       instantly.

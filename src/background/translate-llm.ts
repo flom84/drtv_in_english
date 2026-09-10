@@ -70,12 +70,29 @@ export async function translateWithLLM(
 ): Promise<number> {
   if (cues.length === 0) return 0;
 
-  const batches = buildBatches(cues, cfg.batchSize, cfg.contextWindow);
+  // LibreTranslate handles a larger joined text efficiently. With the
+  // normal five-cue LLM batch size, a full episode becomes hundreds of
+  // serial localhost requests and looks permanently stuck in the UI.
+  const batchSize =
+    cfg.provider === "libretranslate" ? Math.max(cfg.batchSize, 25) : cfg.batchSize;
+  const batches = buildBatches(cues, batchSize, cfg.contextWindow);
+  console.log("[drtv-en/bg] translation plan", {
+    provider: cfg.provider,
+    cueCount: cues.length,
+    batchSize,
+    contextWindow: cfg.contextWindow,
+    batchCount: batches.length,
+  });
   let emitted = 0;
 
   // Load persisted maxParallel for this provider+model, or use configured value
   const persistedMaxParallel = await loadMaxParallel(cfg.provider, cfg.model);
-  let currentConcurrency = persistedMaxParallel ?? cfg.maxParallel;
+  // A local LibreTranslate instance is commonly single-worker; concurrent
+  // requests can queue behind one another and make playback appear stuck.
+  let currentConcurrency =
+    cfg.provider === "libretranslate"
+      ? 1
+      : (persistedMaxParallel ?? cfg.maxParallel);
 
   // Adaptive concurrency: track success rate and adjust
   const attemptWithConcurrency = async (
@@ -112,6 +129,7 @@ export async function translateWithLLM(
       return bestI;
     };
 
+    console.log("[drtv-en/bg] attempt concurrency", concurrency, "remaining batches", remaining.size);
     const workers: Promise<void>[] = [];
     for (let w = 0; w < Math.min(concurrency, remaining.size); w++) {
       workers.push(
@@ -126,6 +144,7 @@ export async function translateWithLLM(
               cfg,
               userPrompt,
               targetIndices,
+              cues,
               opts.signal,
             ).catch((err) => {
               console.warn(
@@ -154,6 +173,13 @@ export async function translateWithLLM(
     // If >50% failures, this concurrency level is too high
     const failureRate = roundTotal > 0 ? roundFailures / roundTotal : 0;
     const success = failureRate <= 0.5;
+    console.log("[drtv-en/bg] concurrency round summary", {
+      concurrency,
+      roundTotal,
+      roundFailures,
+      failureRate,
+      success,
+    });
 
     // Save on first successful round
     let saved = false;
@@ -170,6 +196,11 @@ export async function translateWithLLM(
     if (opts.signal?.aborted) break;
     const result = await attemptWithConcurrency(currentConcurrency);
     if (result.success) {
+      return emitted;
+    }
+    if (currentConcurrency === 1) {
+      // The failed batch already emitted its original text as a fallback.
+      // Do not retry forever when the provider is unavailable or malformed.
       return emitted;
     }
     // Halve concurrency and retry remaining batches
@@ -230,12 +261,16 @@ async function runBatch(
   cfg: ProviderConfig,
   userPrompt: string,
   targetIndices: number[],
+  cues: Cue[],
   signal: AbortSignal | undefined,
 ): Promise<Map<number, string>> {
+  if (cfg.provider === "libretranslate") {
+    return callLibreTranslate(cfg, targetIndices, cues, signal);
+  }
   const raw = await callProvider(cfg, userPrompt, signal);
   console.log("[drtv-en/bg] llm raw response (truncated):", raw?.slice(0, 500));
   const parsed = parseTranslations(raw, targetIndices);
-  console.log("[drtv-en/bg] llm parsed:", parsed.size, "cues");
+  console.log("[drtv-en/bg] llm parsed:", parsed.size, "cues for target indices", targetIndices.join(", "));
   return parsed;
 }
 
@@ -258,9 +293,73 @@ async function callProvider(
       case "alx":
       case "openai-compatible":
         return await callChatCompletions(cfg, userPrompt, boundedSignal);
+      case "libretranslate":
+        throw new Error("LibreTranslate must use its dedicated translation path");
       default:
         throw new Error(`unsupported provider: ${cfg.provider}`);
     }
+  } finally {
+    cancel();
+  }
+}
+
+async function callLibreTranslate(
+  cfg: ProviderConfig,
+  targetIndices: number[],
+  cues: Cue[],
+  signal: AbortSignal | undefined,
+): Promise<Map<number, string>> {
+  const { signal: boundedSignal, cancel } = withTimeout(
+    signal,
+    PROVIDER_TIMEOUT_MS,
+  );
+
+  try {
+    const texts = targetIndices.map((idx) => cues[idx]!.text);
+    const response = await fetch(cfg.endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      keepalive: true,
+      signal: boundedSignal,
+      body: JSON.stringify({
+        q: texts,
+        source: "da",
+        target: "en",
+        format: "text",
+        ...(cfg.apiKey ? { api_key: cfg.apiKey } : {}),
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `libretranslate ${response.status}: ${await response.text()}`,
+      );
+    }
+
+    const data = (await response.json()) as {
+      translatedText?: string | string[];
+    };
+    if (
+      typeof data.translatedText !== "string" &&
+      !Array.isArray(data.translatedText)
+    ) {
+      throw new Error("libretranslate response did not contain translatedText");
+    }
+
+    const translatedTexts = Array.isArray(data.translatedText)
+      ? data.translatedText
+      : [data.translatedText];
+    if (translatedTexts.length !== targetIndices.length) {
+      throw new Error(
+        `libretranslate returned ${translatedTexts.length} cues for ${targetIndices.length}`,
+      );
+    }
+
+    const translated = new Map<number, string>();
+    for (let i = 0; i < targetIndices.length; i++) {
+      const text = translatedTexts[i]!.trim();
+      if (text) translated.set(targetIndices[i]!, text);
+    }
+    return translated;
   } finally {
     cancel();
   }
