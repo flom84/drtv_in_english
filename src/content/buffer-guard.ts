@@ -28,6 +28,7 @@ export class BufferGuard {
   private video: HTMLVideoElement;
   private onStatus: (msg: string | null) => void;
   private starts: number[] = [];
+  private startIndices = new Map<number, number[]>();
   private ready: boolean[] = [];
   private active = false;
   private autoPaused = false;
@@ -49,6 +50,13 @@ export class BufferGuard {
 
   setSchedule(starts: number[]): void {
     this.starts = starts;
+    this.startIndices.clear();
+    for (let i = 0; i < starts.length; i++) {
+      const key = Math.round(starts[i]! * 1000);
+      const indices = this.startIndices.get(key);
+      if (indices) indices.push(i);
+      else this.startIndices.set(key, [i]);
+    }
     this.ready = new Array(starts.length).fill(false);
     this.check();
   }
@@ -110,10 +118,19 @@ export class BufferGuard {
 
   private findStart(t: number): number {
     // Source cue starts are unique to ~ms precision; tolerate float noise.
-    for (let i = 0; i < this.starts.length; i++) {
-      if (Math.abs(this.starts[i]! - t) < 0.001) return i;
+    const key = Math.round(t * 1000);
+    let match = -1;
+    for (const bucket of [key - 1, key, key + 1]) {
+      for (const i of this.startIndices.get(bucket) ?? []) {
+        if (
+          Math.abs(this.starts[i]! - t) < 0.001 &&
+          (match === -1 || i < match)
+        ) {
+          match = i;
+        }
+      }
     }
-    return -1;
+    return match;
   }
 
   private check = (): void => {

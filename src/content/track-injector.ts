@@ -9,9 +9,14 @@ import type { Cue, SubMode } from "../shared/types.js";
 const LABEL = "English (DRTV in English)";
 const MARK = "data-drtv-en-track";
 
+function cueKey(start: number, end: number, text: string): string {
+  return `${start.toFixed(3)}|${end.toFixed(3)}|${text}`;
+}
+
 export class TrackManager {
   private video: HTMLVideoElement;
   private track: TextTrack | null = null;
+  private existingCueKeys = new Set<string>();
   // When true, render cues near the top of the frame — used to dodge
   // burnt-in Danish subtitles on the accessibility ("tale-tekstning")
   // variants of some DR shows.
@@ -49,35 +54,36 @@ export class TrackManager {
     for (const t of Array.from(this.video.textTracks)) {
       if (t.label === LABEL) {
         this.track = t;
+        this.indexExistingCues(t);
         return t;
       }
     }
     const track = this.video.addTextTrack("subtitles", LABEL, "en");
     this.video.setAttribute(MARK, "1");
     this.track = track;
+    this.indexExistingCues(track);
     return track;
+  }
+
+  private indexExistingCues(track: TextTrack): void {
+    const cues = track.cues;
+    if (!cues) return;
+    for (let i = 0; i < cues.length; i++) {
+      const cue = cues[i] as VTTCue;
+      this.existingCueKeys.add(cueKey(cue.startTime, cue.endTime, cue.text));
+    }
   }
 
   addCues(cues: Cue[]): void {
     const track = this.ensureTrack();
-    // Deduplicate: skip cues that already exist in the track. This
-    // guards against the background re-sending batches (e.g. from
-    // cache hits or re-translation) which would cause stacking.
-    const existing = new Set<string>();
-    const trackCues = track.cues;
-    if (trackCues) {
-      for (let i = 0; i < trackCues.length; i++) {
-        const c = trackCues[i] as VTTCue;
-        existing.add(`${c.startTime.toFixed(3)}|${c.endTime.toFixed(3)}|${c.text}`);
-      }
-    }
     for (const c of cues) {
-      const key = `${c.start.toFixed(3)}|${c.end.toFixed(3)}|${c.text}`;
-      if (existing.has(key)) continue;
+      const key = cueKey(c.start, c.end, c.text);
+      if (this.existingCueKeys.has(key)) continue;
       try {
         const vtt = new VTTCue(c.start, c.end, c.text);
         this.positionCue(vtt);
         track.addCue(vtt);
+        this.existingCueKeys.add(key);
       } catch (err) {
         console.warn("[drtv-en/content] addCue failed", err, c);
       }
@@ -85,6 +91,7 @@ export class TrackManager {
   }
 
   clear(): void {
+    this.existingCueKeys.clear();
     if (!this.track) return;
     const cues = this.track.cues;
     if (!cues) return;
