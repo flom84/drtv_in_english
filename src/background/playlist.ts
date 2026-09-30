@@ -10,44 +10,34 @@
 import { parseVtt } from "./vtt-parser.js";
 import type { Cue } from "../shared/types.js";
 
-export async function pageFetch(url: string): Promise<string> {
+export async function pageFetch(tabId: number, url: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tabId = tabs[0]?.id;
-      if (!tabId) {
-        reject(new Error("No active tab"));
+    chrome.tabs.sendMessage(tabId, { type: "fetch-url", url }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
         return;
       }
-      chrome.tabs.sendMessage(
-        tabId,
-        { type: "fetch-url", url },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-            return;
-          }
-          if (response && typeof response === "object" && "error" in response) {
-            reject(new Error(response.error as string));
-            return;
-          }
-          if (typeof response === "string") {
-            resolve(response);
-          } else {
-            reject(new Error("Invalid response from content script"));
-          }
-        },
-      );
+      if (response && typeof response === "object" && "error" in response) {
+        reject(new Error(response.error as string));
+        return;
+      }
+      if (typeof response === "string") {
+        resolve(response);
+      } else {
+        reject(new Error("Invalid response from content script"));
+      }
     });
   });
 }
 
 export async function fetchCuesFromPlaylist(
+  tabId: number,
   playlistUrl: string,
   _signal: AbortSignal,
 ): Promise<Cue[]> {
   // Note: signal ignored — pageFetch doesn't support abort yet
   console.log("[drtv-en/bg] fetching playlist", playlistUrl);
-  const text = await pageFetch(playlistUrl);
+  const text = await pageFetch(tabId, playlistUrl);
   const segmentUris = parseM3u8Segments(text);
   console.log("[drtv-en/bg] playlist segment count", { playlistUrl, count: segmentUris.length });
   if (segmentUris.length === 0) throw new Error("playlist had no segments");
@@ -56,7 +46,7 @@ export async function fetchCuesFromPlaylist(
   const segmentUrls = segmentUris.map((u) => new URL(u, base).toString());
 
   const results = await Promise.all(
-    segmentUrls.map((u) => pageFetch(u)),
+    segmentUrls.map((u) => pageFetch(tabId, u)),
   );
 
   const merged: Cue[] = [];
@@ -74,10 +64,11 @@ export async function fetchCuesFromPlaylist(
 }
 
 export async function fetchCuesFromSingleVtt(
+  tabId: number,
   url: string,
   _signal: AbortSignal,
 ): Promise<Cue[]> {
-  const text = await pageFetch(url);
+  const text = await pageFetch(tabId, url);
   return parseVtt(text);
 }
 

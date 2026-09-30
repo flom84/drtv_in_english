@@ -97,8 +97,14 @@ export async function translateWithLLM(
   // Adaptive concurrency: track success rate and adjust
   const attemptWithConcurrency = async (
     concurrency: number,
-  ): Promise<{ success: boolean; saved: boolean }> => {
-    const remaining = new Set<number>(batches.map((_, i) => i));
+    batchIndices: number[],
+  ): Promise<{
+    success: boolean;
+    saved: boolean;
+    failedBatchIndices: number[];
+  }> => {
+    const remaining = new Set<number>(batchIndices);
+    const failedBatchIndices = new Set<number>();
     let roundFailures = 0;
     let roundTotal = 0;
 
@@ -140,22 +146,27 @@ export async function translateWithLLM(
             if (i === undefined) return;
             const { targetIndices, userPrompt } = batches[i]!;
             roundTotal++;
-            const translations = await runBatch(
-              cfg,
-              userPrompt,
-              targetIndices,
-              cues,
-              opts.signal,
-            ).catch((err) => {
+            let translations: Map<number, string> | null;
+            try {
+              translations = await runBatch(
+                cfg,
+                userPrompt,
+                targetIndices,
+                cues,
+                opts.signal,
+              );
+            } catch (err) {
               console.warn(
                 "[drtv-en/bg] batch failed",
                 targetIndices,
                 err,
               );
               roundFailures++;
-              return new Map<number, string>();
-            });
+              failedBatchIndices.add(i);
+              translations = null;
+            }
             if (opts.signal?.aborted) return;
+            if (translations === null) continue;
             const batchCues: Cue[] = targetIndices.map((idx) => {
               const src = cues[idx]!;
               const text = translations.get(idx)?.trim() || src.text;
@@ -188,22 +199,29 @@ export async function translateWithLLM(
       saved = true;
     }
 
-    return { success, saved };
+    return { success, saved, failedBatchIndices: [...failedBatchIndices] };
   };
 
   // Start with current concurrency, halve if needed
+  let pendingBatchIndices = batches.map((_, i) => i);
   while (currentConcurrency >= 1) {
     if (opts.signal?.aborted) break;
-    const result = await attemptWithConcurrency(currentConcurrency);
-    if (result.success) {
+    const result = await attemptWithConcurrency(
+      currentConcurrency,
+      pendingBatchIndices,
+    );
+    if (result.success || currentConcurrency === 1) {
+      for (const batchIndex of result.failedBatchIndices) {
+        const fallbackCues = batches[batchIndex]!.targetIndices.map(
+          (idx) => cues[idx]!,
+        );
+        emitted += fallbackCues.length;
+        opts.onBatch(fallbackCues);
+      }
       return emitted;
     }
-    if (currentConcurrency === 1) {
-      // The failed batch already emitted its original text as a fallback.
-      // Do not retry forever when the provider is unavailable or malformed.
-      return emitted;
-    }
-    // Halve concurrency and retry remaining batches
+    pendingBatchIndices = result.failedBatchIndices;
+    // Retry only failed batches at lower concurrency.
     currentConcurrency = Math.max(1, Math.floor(currentConcurrency / 2));
     console.log(
       "[drtv-en/bg] reducing concurrency to",

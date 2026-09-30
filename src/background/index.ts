@@ -43,10 +43,9 @@ interface ActiveJob {
   episodeId: string;
   abort: AbortController;
   playhead: number;
+  heartbeat: ReturnType<typeof setInterval> | null;
 }
 const activeJobs = new Map<number, ActiveJob>();
-// Heartbeat interval — cleared when job ends or port disconnects.
-let heartbeatInterval: ReturnType<typeof setInterval> | undefined = undefined;
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== PORT_NAME) return;
@@ -98,7 +97,6 @@ chrome.runtime.onConnect.addListener((port) => {
 
   port.onDisconnect.addListener(() => {
     console.log("[drtv-en/bg] port disconnected for tab", tabId);
-    clearInterval(heartbeatInterval);
     cancelJob(tabId);
   });
 });
@@ -106,6 +104,10 @@ chrome.runtime.onConnect.addListener((port) => {
 function cancelJob(tabId: number): void {
   const job = activeJobs.get(tabId);
   if (!job) return;
+  if (job.heartbeat !== null) {
+    clearInterval(job.heartbeat);
+    job.heartbeat = null;
+  }
   job.abort.abort();
   activeJobs.delete(tabId);
 }
@@ -118,14 +120,19 @@ async function runJob(
 ): Promise<void> {
   cancelJob(tabId);
   const abort = new AbortController();
-  const job: ActiveJob = { episodeId, abort, playhead: initialPlayhead };
+  const job: ActiveJob = {
+    episodeId,
+    abort,
+    playhead: initialPlayhead,
+    heartbeat: null,
+  };
   activeJobs.set(tabId, job);
 
   // Heartbeat to keep the service worker alive during long translations.
   // Chrome kills idle service workers after ~30s; vLLM endpoints can be
   // slow enough that translation exceeds this limit. Ping the content
   // script every 10s to keep the port connection alive.
-  heartbeatInterval = setInterval(() => {
+  job.heartbeat = setInterval(() => {
     try {
       send({ type: "heartbeat" });
     } catch {
@@ -140,7 +147,7 @@ async function runJob(
 
     console.log("[drtv-en/bg] job", episodeId, "via playlist", playlist);
     send({ type: "status", state: "fetching-vtt", detail: playlist });
-    const cues = await fetchCuesFromPlaylist(playlist, abort.signal);
+    const cues = await fetchCuesFromPlaylist(tabId, playlist, abort.signal);
 
     console.log("[drtv-en/bg] parsed cues:", cues.length, "first:", cues[0]);
     send({ type: "status", state: "parsing" });
@@ -237,7 +244,10 @@ async function runJob(
       message: err instanceof Error ? err.message : String(err),
     });
   } finally {
-    clearInterval(heartbeatInterval);
+    if (job.heartbeat !== null) {
+      clearInterval(job.heartbeat);
+      job.heartbeat = null;
+    }
     if (activeJobs.get(tabId)?.abort === abort) {
       activeJobs.delete(tabId);
     }
@@ -270,7 +280,7 @@ async function waitForDanishPlaylist(
       masterUrl,
     });
     if (masterUrl) {
-      const resolved = await tryResolveFromMaster(masterUrl, signal);
+      const resolved = await tryResolveFromMaster(tabId, masterUrl, signal);
       if (resolved) return resolved;
       // Master fetch/parse failed: fall back to whatever playlist we
       // sniffed and try our string-heuristic pick.
@@ -296,6 +306,7 @@ async function waitForDanishPlaylist(
 }
 
 async function tryResolveFromMaster(
+  tabId: number,
   masterUrl: string,
   signal: AbortSignal,
 ): Promise<string | undefined> {
@@ -305,7 +316,7 @@ async function tryResolveFromMaster(
     // blocked by CORS in Chrome. The content script shares the dr.dk
     // origin and pulls it without trouble — same path as the playlist
     // and segment fetches.
-    const text = await pageFetch(masterUrl);
+    const text = await pageFetch(tabId, masterUrl);
     const tracks = parseSubtitleTracks(text);
     const danish = pickDanishTrack(tracks);
     if (!danish || !danish.uri) {
