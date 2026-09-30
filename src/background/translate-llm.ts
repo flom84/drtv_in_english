@@ -282,14 +282,20 @@ async function runBatch(
   cues: Cue[],
   signal: AbortSignal | undefined,
 ): Promise<Map<number, string>> {
+  let translations: Map<number, string>;
   if (cfg.provider === "libretranslate") {
-    return callLibreTranslate(cfg, targetIndices, cues, signal);
+    translations = await callLibreTranslate(cfg, targetIndices, cues, signal);
+  } else {
+    const raw = await callProvider(cfg, userPrompt, signal);
+    console.log("[drtv-en/bg] llm raw response (truncated):", raw?.slice(0, 500));
+    translations = parseTranslations(raw, targetIndices);
+    console.log("[drtv-en/bg] llm parsed:", translations.size, "cues for target indices", targetIndices.join(", "));
   }
-  const raw = await callProvider(cfg, userPrompt, signal);
-  console.log("[drtv-en/bg] llm raw response (truncated):", raw?.slice(0, 500));
-  const parsed = parseTranslations(raw, targetIndices);
-  console.log("[drtv-en/bg] llm parsed:", parsed.size, "cues for target indices", targetIndices.join(", "));
-  return parsed;
+  const missing = targetIndices.filter((idx) => !translations.get(idx)?.trim());
+  if (missing.length > 0) {
+    throw new Error(`translation response missing cue ids: ${missing.join(", ")}`);
+  }
+  return translations;
 }
 
 async function callProvider(

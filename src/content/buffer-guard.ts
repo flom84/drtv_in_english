@@ -76,14 +76,21 @@ export class BufferGuard {
 
   markReady(cueStarts: number[]): void {
     for (const t of cueStarts) {
-      const idx = this.findStart(t);
-      if (idx >= 0) this.ready[idx] = true;
+      const key = Math.round(t * 1000);
+      for (let offset = -1; offset <= 1; offset++) {
+        for (const idx of this.startIndices.get(key + offset) ?? []) {
+          if (Math.abs(this.starts[idx]! - t) < 0.001) {
+            this.ready[idx] = true;
+          }
+        }
+      }
     }
     this.check();
   }
 
   reset(): void {
     this.starts = [];
+    this.startIndices.clear();
     this.ready = [];
     if (this.autoPaused) this.resume();
     this.onStatus(null);
@@ -114,23 +121,6 @@ export class BufferGuard {
     this.video.removeEventListener("seeking", this.check);
     this.video.removeEventListener("pause", this.onPause);
     this.video.removeEventListener("play", this.onPlay);
-  }
-
-  private findStart(t: number): number {
-    // Source cue starts are unique to ~ms precision; tolerate float noise.
-    const key = Math.round(t * 1000);
-    let match = -1;
-    for (const bucket of [key - 1, key, key + 1]) {
-      for (const i of this.startIndices.get(bucket) ?? []) {
-        if (
-          Math.abs(this.starts[i]! - t) < 0.001 &&
-          (match === -1 || i < match)
-        ) {
-          match = i;
-        }
-      }
-    }
-    return match;
   }
 
   private check = (): void => {

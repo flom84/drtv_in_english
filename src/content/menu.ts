@@ -21,6 +21,7 @@ export interface MenuOptions {
   onPick: (mode: SubMode) => void;
   onTogglePosition: (top: boolean) => void;
   initialTopPosition: boolean;
+  signal?: AbortSignal;
 }
 
 // Bypass flag for synthetic clicks we dispatch on DR's button. The
@@ -35,36 +36,56 @@ export function attachMenu(opts: MenuOptions): Promise<MenuController> {
     let currentSelection: SubMode = "off";
     let currentTop = opts.initialTopPosition;
     let drButton: HTMLElement | null = null;
+    let observer: MutationObserver | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+
+    const finish = (next: MenuController): void => {
+      if (settled) {
+        next.destroy();
+        return;
+      }
+      settled = true;
+      observer?.disconnect();
+      observer = null;
+      if (fallbackTimer !== null) clearTimeout(fallbackTimer);
+      opts.signal?.removeEventListener("abort", onAbort);
+      resolve(next);
+    };
+
+    const onAbort = (): void => finish(NOOP_MENU);
+    if (opts.signal?.aborted) {
+      finish(NOOP_MENU);
+      return;
+    }
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
 
     const tryAttach = (): boolean => {
       const btn = findSubtitleButton();
       if (!btn) return false;
-      if (btn.hasAttribute(MARK)) return true;
+      if (btn.hasAttribute(MARK)) return false;
       btn.setAttribute(MARK, "hooked");
       drButton = btn;
-      btn.addEventListener(
-        "click",
-        (e) => {
-          if (bypassNext) return; // synthetic click — let DR handle it
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation();
-          openMenu(
-            btn,
-            currentSelection,
-            currentTop,
-            (mode) => {
-              currentSelection = mode;
-              opts.onPick(mode);
-            },
-            (top) => {
-              currentTop = top;
-              opts.onTogglePosition(top);
-            },
-          );
-        },
-        true,
-      );
+      const onClick = (e: MouseEvent): void => {
+        if (bypassNext) return; // synthetic click — let DR handle it
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        openMenu(
+          btn,
+          currentSelection,
+          currentTop,
+          (mode) => {
+            currentSelection = mode;
+            opts.onPick(mode);
+          },
+          (top) => {
+            currentTop = top;
+            opts.onTogglePosition(top);
+          },
+        );
+      };
+      btn.addEventListener("click", onClick, true);
       console.log("[drtv-en/content] hooked DR subtitle button");
       controller = {
         setSelection(mode) {
@@ -86,25 +107,31 @@ export function attachMenu(opts: MenuOptions): Promise<MenuController> {
           return true;
         },
         destroy() {
+          btn.removeEventListener("click", onClick, true);
           btn.removeAttribute(MARK);
+          closeMenu();
         },
       };
-      resolve(controller);
+      finish(controller);
       return true;
     };
 
     if (tryAttach()) return;
 
-    const obs = new MutationObserver(() => {
-      if (tryAttach()) obs.disconnect();
+    observer = new MutationObserver(() => {
+      if (tryAttach()) observer?.disconnect();
     });
-    obs.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, subtree: true });
 
-    setTimeout(() => {
-      if (controller) return;
-      obs.disconnect();
+    fallbackTimer = setTimeout(() => {
+      if (settled) return;
+      observer?.disconnect();
+      observer = null;
       const candidate = findSubtitleButton();
-      if (!candidate) return;
+      if (!candidate) {
+        finish(NOOP_MENU);
+        return;
+      }
       const pill = insertPill(
         candidate,
         (mode) => {
@@ -130,17 +157,27 @@ export function attachMenu(opts: MenuOptions): Promise<MenuController> {
         },
         destroy() {
           pill.remove();
+          closeMenu();
         },
       };
-      resolve(controller);
+      finish(controller);
     }, 20_000);
   });
 }
 
+const NOOP_MENU: MenuController = {
+  setSelection() {},
+  setTopPosition() {},
+  dispatchDrClick() {
+    return false;
+  },
+  destroy() {},
+};
+
 function findSubtitleButton(): HTMLElement | null {
   const all = document.querySelectorAll<HTMLElement>("button, [role='button']");
   for (const el of all) {
-    if (el.hasAttribute(MARK) && el.getAttribute(MARK) !== "hooked") continue;
+    if (el.hasAttribute(MARK)) continue;
     const aria = (el.getAttribute("aria-label") || "").toLowerCase();
     const rawCls: unknown = el.className;
     const cls = (typeof rawCls === "string" ? rawCls : String(rawCls ?? "")).toLowerCase();

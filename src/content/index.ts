@@ -25,6 +25,7 @@ interface EpisodeState {
   video: HTMLVideoElement;
   track: TrackManager;
   menu: MenuController;
+  menuAbort: AbortController;
   guard: BufferGuard;
   port: chrome.runtime.Port;
   // DR's subtitle button is a toggle. We remember what we last drove
@@ -45,6 +46,14 @@ const STALL_HINT_MS = 60_000;
 let state: EpisodeState | null = null;
 let statusEl: HTMLElement | null = null;
 let statusTextEl: HTMLElement | null = null;
+const NOOP_MENU: MenuController = {
+  setSelection() {},
+  setTopPosition() {},
+  dispatchDrClick() {
+    return false;
+  },
+  destroy() {},
+};
 
 async function bootEpisode(episodeId: string): Promise<void> {
   console.log(TAG, "bootEpisode start", { episodeId, href: location.href });
@@ -76,12 +85,14 @@ async function bootEpisode(episodeId: string): Promise<void> {
 
   const port = chrome.runtime.connect({ name: PORT_NAME });
   port.onMessage.addListener(onPortEvent);
+  const menuAbort = new AbortController();
 
   const s: EpisodeState = {
     episodeId,
     video,
     track,
-    menu: null as unknown as MenuController, // attached just below
+    menu: NOOP_MENU,
+    menuAbort,
     guard,
     port,
     drSubsOn: false,
@@ -104,8 +115,9 @@ async function bootEpisode(episodeId: string): Promise<void> {
     url: location.href,
   });
 
-  s.menu = await attachMenu({
+  const menu = await attachMenu({
     initialTopPosition: false,
+    signal: s.menuAbort.signal,
     onPick: (mode) => {
       if (state === s && !s.destroyed) applySelection(s, mode);
     },
@@ -115,7 +127,11 @@ async function bootEpisode(episodeId: string): Promise<void> {
       s.menu.setTopPosition(top);
     },
   });
-  if (s.destroyed) return;
+  if (s.destroyed) {
+    menu.destroy();
+    return;
+  }
+  s.menu = menu;
   console.log(TAG, "ready for episode", episodeId);
 }
 
@@ -129,6 +145,7 @@ function teardownEpisode(reason: string): void {
   } catch {
     /* port may already be gone */
   }
+  s.menuAbort.abort();
   s.guard.destroy();
   s.track.clear();
   s.menu.destroy();
